@@ -1,0 +1,20 @@
+
+module my-hibernate 1.0;
+
+require {
+	type systemd_sleep_t;
+	type unconfined_service_t;
+	type systemd_logind_t;
+	type swapfile_t;
+	class dir search;
+	class capability2 mac_admin;
+}
+
+#============= systemd_logind_t ==============
+allow systemd_logind_t swapfile_t:dir search;
+
+#============= systemd_sleep_t ==============
+allow systemd_sleep_t swapfile_t:dir search;
+
+#============= unconfined_service_t ==============
+#allow unconfined_service_t self:capability2 mac_admin;
