@@ -28,7 +28,7 @@ info "Step 1: Installing packages..."
 
 pacman -S --needed --noconfirm apparmor audit
 
-if ! pacman -Qi apparmor.d.enforced &>/dev/null && ! pacman -Qi apparmor.d-git &>/dev/null; then
+if ! pacman -Qi apparmor.d-git &>/dev/null && ! pacman -Qi apparmor.d &>/dev/null; then
     AUR_HELPER=""
     if command -v paru &>/dev/null; then
         AUR_HELPER="paru"
@@ -38,13 +38,13 @@ if ! pacman -Qi apparmor.d.enforced &>/dev/null && ! pacman -Qi apparmor.d-git &
 
     if [[ -z "$AUR_HELPER" ]]; then
         error "No AUR helper found (paru or yay). Install apparmor.d manually:"
-        error "  paru -S apparmor.d.enforced"
+        error "  paru -S apparmor.d-git or apparmor.d or apparmor.d"
         error "  # or: yay -S apparmor.d-git"
         exit 1
     fi
 
     info "Installing apparmor.d via $AUR_HELPER..."
-    "$AUR_HELPER" -S apparmor.d.enforced || "$AUR_HELPER" -S apparmor.d-git
+    "$AUR_HELPER" -S apparmor.d-git || "$AUR_HELPER" -S apparmor.d || "$AUR_HELPER" -S apparmor.d.enforced
 fi
 
 # ─── Step 2: Enable kernel parameters (UKI-aware) ────────────────────────────
