@@ -6,7 +6,7 @@
 Type = Path
 Operation = Install
 Operation = Upgrade
-Target = usr/lib/systemd/boot/efi/systemd-bootx64.efi
+Target = usr/lib/systemd/boot/efi/*.efi
 
 [Action]
 Description = Signing systemd-boot EFI binaries...
