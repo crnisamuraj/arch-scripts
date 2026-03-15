@@ -7,14 +7,12 @@ Type = Path
 Operation = Install
 Operation = Upgrade
 Target = usr/lib/systemd/boot/efi/*.efi
-Target = usr/lib/systemd/boot/efi/*
-Target = usr/lib/systemd/boot/*
 
-[Trigger]
-Type = Package
-Operation = Install
-Operation = Upgrade
-Target = systemd
+#[Trigger]
+#Type = Package
+#Operation = Install
+#Operation = Upgrade
+#Target = systemd
 
 [Action]
 Description = Signing systemd-boot EFI binaries...
