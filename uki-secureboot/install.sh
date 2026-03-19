@@ -20,7 +20,7 @@ die()  { echo -e "${RED}[install] ERROR:${NC} $*" >&2; exit 1; }
 # ─── Check dependencies ─────────────────────────────────────────────────────
 log "Checking dependencies..."
 missing=()
-for pkg in systemd-ukify sbsigntools mokutil openssl; do
+for pkg in systemd-ukify sbctl; do
     if ! pacman -Qi "${pkg}" >/dev/null 2>&1; then
         missing+=("${pkg}")
     fi
@@ -31,17 +31,34 @@ if [[ ${#missing[@]} -gt 0 ]]; then
     pacman -S --needed --noconfirm "${missing[@]}"
 fi
 
+# ─── Verify required system hooks are present ───────────────────────────────
+# We rely on these distro-provided hooks to update and sign the bootloader.
+# Without them the signing chain breaks — abort before modifying anything.
+log "Checking required system hooks..."
+required_hooks=(
+    /usr/share/libalpm/hooks/sdboot-systemd-update.hook  # runs bootctl update on systemd upgrade
+    /usr/share/libalpm/hooks/zz-sbctl.hook               # re-signs EFI after updates
+)
+missing_hooks=()
+for hook in "${required_hooks[@]}"; do
+    [[ -f "${hook}" ]] || missing_hooks+=("${hook}")
+done
+if [[ ${#missing_hooks[@]} -gt 0 ]]; then
+    die "Required system hooks not found — install the packages that provide them:
+$(printf '  %s\n' "${missing_hooks[@]}")
+  sdboot-systemd-update.hook → sdboot-manage
+  zz-sbctl.hook              → sbctl"
+fi
+log "Required hooks present."
+
 # ─── Deploy scripts ─────────────────────────────────────────────────────────
 log "Deploying scripts to /etc/uki-secureboot/..."
-mkdir -p /etc/uki-secureboot/keys
+mkdir -p /etc/uki-secureboot
 
-cp "${SCRIPT_DIR}/generate-mok.sh"    /etc/uki-secureboot/
-cp "${SCRIPT_DIR}/uki-build.sh"       /etc/uki-secureboot/
-cp "${SCRIPT_DIR}/uki-remove.sh"      /etc/uki-secureboot/
-cp "${SCRIPT_DIR}/sign-bootloader.sh" /etc/uki-secureboot/
+cp "${SCRIPT_DIR}/uki-build.sh"  /etc/uki-secureboot/
+cp "${SCRIPT_DIR}/uki-remove.sh" /etc/uki-secureboot/
 
 chmod 700 /etc/uki-secureboot/*.sh
-chmod 700 /etc/uki-secureboot/keys
 
 # ─── Kernel command line ─────────────────────────────────────────────────────
 if [[ ! -f /etc/uki-secureboot/cmdline ]]; then
@@ -64,9 +81,15 @@ fi
 log "Installing pacman hooks..."
 mkdir -p /etc/pacman.d/hooks
 
-cp "${SCRIPT_DIR}/99-uki-build.hook"       /etc/pacman.d/hooks/
-cp "${SCRIPT_DIR}/99-uki-remove.hook"      /etc/pacman.d/hooks/
-cp "${SCRIPT_DIR}/zz-sign-bootloader.hook" /etc/pacman.d/hooks/
+cp "${SCRIPT_DIR}/99-uki-build.hook"  /etc/pacman.d/hooks/
+cp "${SCRIPT_DIR}/99-uki-remove.hook" /etc/pacman.d/hooks/
+
+# ─── Mask systemd-boot-update.service ───────────────────────────────────────
+# The service runs bootctl update at boot with no signing step after it.
+# Bootloader updates are handled by sdboot-systemd-update.hook + zz-sbctl.hook
+# during pacman transactions, which sign after updating.
+log "Masking systemd-boot-update.service..."
+systemctl mask systemd-boot-update.service
 
 # ─── Disable mkinitcpio's default UKI/copying hooks if present ──────────────
 # CachyOS may ship hooks that copy vmlinuz/initramfs to ESP — we handle that now
@@ -98,16 +121,20 @@ log "Installation complete!"
 echo ""
 echo "Next steps:"
 echo "  1. Review /etc/uki-secureboot/cmdline (auto-detected from current boot)"
-echo "  2. Generate MOK keys:"
-echo "       sudo /etc/uki-secureboot/generate-mok.sh"
-echo "  3. Enroll MOK in firmware:"
-echo "       sudo mokutil --import /etc/uki-secureboot/keys/MOK.cer"
-echo "       (reboot and confirm in MOK Manager)"
-echo "  4. Build initial UKIs:"
+echo "  2. Generate Secure Boot keys:"
+echo "       sudo sbctl create-keys"
+echo "  3. Enroll keys in firmware (enter Setup Mode in UEFI first):"
+echo "       sudo sbctl enroll-keys --microsoft"
+echo "  4. Sign systemd-boot EFI binaries and register with sbctl:"
+echo "       sudo sbctl sign -s /boot/EFI/BOOT/BOOTX64.EFI"
+echo "       sudo sbctl sign -s /boot/EFI/systemd/systemd-bootx64.efi"
+echo "  5. Build and sign initial UKIs:"
 echo "       sudo /etc/uki-secureboot/uki-build.sh"
-echo "  5. Sign systemd-boot bootloader:"
-echo "       sudo /etc/uki-secureboot/sign-bootloader.sh"
-echo "  6. Test boot with the UKI entry in systemd-boot"
-echo "  7. Once confirmed working, enable Secure Boot in UEFI settings"
+echo "  6. Verify all binaries are signed:"
+echo "       sudo sbctl verify"
+echo "  7. Reboot and enable Secure Boot in UEFI settings"
+echo ""
+echo "Note: systemd-boot-update.service is masked by this installer."
+echo "  Bootloader updates are handled by sdboot-systemd-update.hook + zz-sbctl.hook."
 echo ""
 warn "IMPORTANT: Keep a USB recovery drive ready before enabling Secure Boot!"

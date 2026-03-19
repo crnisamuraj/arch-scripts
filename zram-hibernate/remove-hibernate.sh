@@ -19,10 +19,16 @@ CMDLINE_FILE="/etc/uki-secureboot/cmdline"
 APPARMOR_LOCAL="/etc/apparmor.d/local/systemd-sleep"
 APPARMOR_PROFILE="/etc/apparmor.d/systemd-sleep"
 
+MKINITCPIO_CONF="/etc/mkinitcpio.conf"
+
 [[ $EUID -eq 0 ]] || die "Must run as root: sudo $0"
 
-echo -e "${YELLOW}[remove]${NC} This will undo all hibernate configuration. Ctrl-C to cancel."
+warn "This will undo all hibernate configuration. Ctrl-C to cancel."
 echo ""
+sleep 5
+
+NEED_INITRAMFS=false   # mkinitcpio.conf changed → mkinitcpio -P required
+NEED_UKI=false         # cmdline or initramfs changed → uki-build required
 
 # ─── 1. Swapoff ──────────────────────────────────────────────────────────────
 
@@ -59,11 +65,11 @@ else
     log "$SWAP_PATH not found — skipping."
 fi
 
-# ─── 4. Remove resume params from cmdline and rebuild UKIs ───────────────────
+# ─── 4. Remove resume params from cmdline ────────────────────────────────────
 
 if [[ -f "$CMDLINE_FILE" ]]; then
     OLD_CMDLINE=$(cat "$CMDLINE_FILE")
-    NEW_CMDLINE=$(echo "$OLD_CMDLINE" \
+    NEW_CMDLINE=$(printf '%s' "$OLD_CMDLINE" \
         | sed 's/resume=UUID=[^ ]*//g' \
         | sed 's/resume_offset=[^ ]*//g' \
         | sed 's/  */ /g' \
@@ -74,15 +80,10 @@ if [[ -f "$CMDLINE_FILE" ]]; then
         log "  old: $OLD_CMDLINE"
         log "  new: $NEW_CMDLINE"
         _tmp=$(mktemp "${CMDLINE_FILE}.XXXXXX")
-        echo "$NEW_CMDLINE" > "$_tmp"
+        chmod --reference="$CMDLINE_FILE" "$_tmp"
+        printf '%s' "$NEW_CMDLINE" > "$_tmp"
         mv "$_tmp" "$CMDLINE_FILE"
-
-        if [[ -x "/etc/uki-secureboot/uki-build.sh" ]]; then
-            log "Rebuilding and re-signing UKIs..."
-            /etc/uki-secureboot/uki-build.sh
-        else
-            warn "uki-build.sh not found — UKIs not rebuilt. Run manually when available."
-        fi
+        NEED_UKI=true
     else
         log "No resume params found in cmdline — skipping."
     fi
@@ -90,12 +91,42 @@ else
     warn "Cmdline file not found: $CMDLINE_FILE — skipping."
 fi
 
-# ─── 5. mkinitcpio warning ───────────────────────────────────────────────────
+# ─── 5. Remove 'resume' hook from mkinitcpio.conf (udev setups only) ─────────
 
-warn "ACTION REQUIRED: Manually remove 'resume' from HOOKS in /etc/mkinitcpio.conf"
-warn "  Then run: mkinitcpio -P && /etc/uki-secureboot/uki-build.sh"
+if [[ -f "$MKINITCPIO_CONF" ]]; then
+    HOOKS_LINE=$(grep -E '^\s*HOOKS=' "$MKINITCPIO_CONF" | tail -1 || true)
+    hooks_content=$(printf '%s\n' "$HOOKS_LINE" | sed 's/.*HOOKS=(\([^)]*\)).*/\1/')
+    if printf '%s\n' "$hooks_content" | grep -qw 'udev' && printf '%s\n' "$hooks_content" | grep -qw 'resume'; then
+        log "Removing 'resume' hook from $MKINITCPIO_CONF..."
+        cp "$MKINITCPIO_CONF" "${MKINITCPIO_CONF}.bak"
+        sed -i '/^\s*HOOKS=/ { s/\bresume\b//g; s/  */ /g; s/(  */(/; s/ )/)/; }' "$MKINITCPIO_CONF"
+        log "Removed 'resume' hook (backup: ${MKINITCPIO_CONF}.bak)."
+        NEED_INITRAMFS=true
+        NEED_UKI=true
+    else
+        log "No 'resume' hook to remove (systemd-based initramfs or already absent)."
+    fi
+else
+    warn "$MKINITCPIO_CONF not found — skipping resume hook removal."
+fi
 
-# ─── 6. Remove AppArmor local override ───────────────────────────────────────
+# ─── 6. Rebuild initramfs and UKIs if anything changed ───────────────────────
+
+if [[ "$NEED_INITRAMFS" == true ]]; then
+    log "Rebuilding initramfs (mkinitcpio -P)..."
+    mkinitcpio -P
+fi
+
+if [[ "$NEED_UKI" == true ]]; then
+    if [[ -x "/etc/uki-secureboot/uki-build.sh" ]]; then
+        log "Rebuilding and re-signing UKIs..."
+        /etc/uki-secureboot/uki-build.sh
+    else
+        warn "uki-build.sh not found — UKIs not rebuilt. Run manually when available."
+    fi
+fi
+
+# ─── 7. Remove AppArmor local override ───────────────────────────────────────
 
 if [[ -f "$APPARMOR_LOCAL" ]]; then
     log "Removing AppArmor local override: $APPARMOR_LOCAL"
@@ -109,7 +140,7 @@ else
     log "AppArmor local override not found — skipping."
 fi
 
-# ─── 7–8. Remove systemd drop-ins ────────────────────────────────────────────
+# ─── 8–9. Remove systemd drop-ins ────────────────────────────────────────────
 
 for f in \
     /etc/systemd/logind.conf.d/hibernate.conf \
@@ -122,12 +153,12 @@ for f in \
     fi
 done
 
-# ─── 9. Reload systemd ───────────────────────────────────────────────────────
+# ─── 10. Reload systemd ──────────────────────────────────────────────────────
 
 systemctl daemon-reload
 log "systemd daemon reloaded."
 
-# ─── 10. Summary ─────────────────────────────────────────────────────────────
+# ─── 11. Summary ─────────────────────────────────────────────────────────────
 
 echo ""
 echo -e "${GREEN}══════════════════════════════════════════════${NC}"
@@ -137,14 +168,11 @@ echo ""
 echo "Removed:"
 echo "  - Swapfile ($SWAP_FILE)"
 echo "  - /etc/fstab entry"
-echo "  - resume params from $CMDLINE_FILE (UKIs rebuilt)"
+echo "  - resume params from $CMDLINE_FILE"
 echo "  - AppArmor local override ($APPARMOR_LOCAL)"
 echo "  - /etc/systemd/logind.conf.d/hibernate.conf"
 echo "  - /etc/systemd/sleep.conf.d/hibernate.conf"
 echo ""
-echo -e "${YELLOW}Still required manually:${NC}"
-echo "  1. Remove 'resume' from HOOKS in /etc/mkinitcpio.conf"
-echo "  2. Run: mkinitcpio -P"
-echo "  3. Run: /etc/uki-secureboot/uki-build.sh"
-echo "  4. Reboot"
+echo -e "${YELLOW}Action required:${NC}"
+echo "  Reboot to activate the restored kernel configuration."
 echo ""

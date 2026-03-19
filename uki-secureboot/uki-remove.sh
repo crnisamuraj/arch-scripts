@@ -67,6 +67,7 @@ for uki in "${UKI_DIR}"/*.efi; do
 
     if [[ ${found} -eq 0 ]]; then
         log "Removing orphaned UKI: ${uki}"
+        sbctl remove-file "${uki}" 2>/dev/null || true
         rm -f "${uki}"
         removed=$((removed + 1))
     fi

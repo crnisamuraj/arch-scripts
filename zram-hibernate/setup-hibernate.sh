@@ -28,47 +28,47 @@ for cmd in btrfs findmnt mkinitcpio; do
     command -v "$cmd" >/dev/null 2>&1 || die "Required command not found: $cmd"
 done
 
+# Verify btrfs filesystem mkswapfile subcommand (requires btrfs-progs ≥ 6.1)
+# btrfs filesystem --help exits non-zero (usage exit code), so neutralise it before piping
+if ! { btrfs filesystem --help 2>/dev/null; true; } | grep -q 'mkswapfile'; then
+    die "'btrfs filesystem mkswapfile' not available — upgrade btrfs-progs to ≥ 6.1"
+fi
+
+# Verify swap path will land on a BTRFS filesystem
+_swap_parent="$(dirname "$SWAP_PATH")"
+_swap_fstype=$(findmnt -no FSTYPE -T "$_swap_parent" 2>/dev/null || true)
+[[ "$_swap_fstype" == "btrfs" ]] \
+    || die "$_swap_parent is not on a BTRFS filesystem (detected: ${_swap_fstype:-unknown}) — this script requires BTRFS"
+
 [[ -f "$CMDLINE_FILE" ]]     || die "Kernel cmdline file not found: $CMDLINE_FILE — is uki-secureboot set up?"
 [[ -f "$MKINITCPIO_CONF" ]]  || die "mkinitcpio config not found: $MKINITCPIO_CONF"
 
-# Verify 'resume' hook presence and ordering in mkinitcpio.conf
+# Detect initramfs type (systemd or udev) and handle 'resume' hook
 HOOKS_LINE=$(grep -E '^\s*HOOKS=' "$MKINITCPIO_CONF" | tail -1 || true)
 [[ -n "$HOOKS_LINE" ]] || die "Could not find HOOKS= line in $MKINITCPIO_CONF"
 
-hooks_content=$(echo "$HOOKS_LINE" | sed 's/.*HOOKS=(\([^)]*\)).*/\1/')
+hooks_content=$(printf '%s\n' "$HOOKS_LINE" | sed 's/.*HOOKS=(\([^)]*\)).*/\1/')
 [[ "$hooks_content" != "$HOOKS_LINE" ]] \
     || die "Could not parse HOOKS array from $MKINITCPIO_CONF — unexpected format: $HOOKS_LINE"
 
-if ! echo "$hooks_content" | grep -qw 'resume'; then
-    die "'resume' hook not found in $MKINITCPIO_CONF HOOKS.
-
-Add 'resume' after 'filesystems' in the HOOKS line, e.g.:
-  HOOKS=(base udev autodetect modconf kms keyboard keymap consolefont block filesystems resume fsck)
-
-Then re-run this script."
+if printf '%s\n' "$hooks_content" | grep -qw 'systemd'; then
+    log "Detected systemd-based initramfs — resume handled by systemd-hibernate-resume (no 'resume' hook needed)."
+elif printf '%s\n' "$hooks_content" | grep -qw 'udev'; then
+    log "Detected udev-based initramfs."
+    if ! printf '%s\n' "$hooks_content" | grep -qw 'resume'; then
+        log "Adding 'resume' hook after 'filesystems' in $MKINITCPIO_CONF..."
+        if ! printf '%s\n' "$hooks_content" | grep -qw 'filesystems'; then
+            die "'filesystems' hook not found in $MKINITCPIO_CONF — cannot insert 'resume'. Add it manually."
+        fi
+        cp "$MKINITCPIO_CONF" "${MKINITCPIO_CONF}.bak"
+        sed -i '/^\s*HOOKS=/ s/\bfilesystems\b/filesystems resume/' "$MKINITCPIO_CONF"
+        log "Added 'resume' hook (backup: ${MKINITCPIO_CONF}.bak)."
+    else
+        log "'resume' hook already present."
+    fi
+else
+    die "Could not detect 'systemd' or 'udev' hook in $MKINITCPIO_CONF — cannot verify resume support."
 fi
-
-# Check that resume comes after filesystems
-fs_pos=0
-resume_pos=0
-i=0
-for hook in $hooks_content; do
-    i=$((i + 1))
-    if [[ "$hook" == "filesystems" ]]; then fs_pos=$i; fi
-    if [[ "$hook" == "resume" ]];      then resume_pos=$i; fi
-done
-
-if [[ $fs_pos -gt 0 && $resume_pos -le $fs_pos ]]; then
-    die "'resume' hook must come AFTER 'filesystems' in $MKINITCPIO_CONF HOOKS.
-
-Current order: filesystems=$fs_pos, resume=$resume_pos
-Fix: move 'resume' to after 'filesystems', e.g.:
-  HOOKS=(base udev autodetect ... filesystems resume fsck)
-
-Then re-run this script."
-fi
-
-log "Pre-flight OK: 'resume' hook present and correctly ordered."
 
 if grep -qw 'noresume' "$CMDLINE_FILE"; then
     warn "'noresume' found in $CMDLINE_FILE — hibernate will not restore state until it is removed!"
@@ -77,6 +77,7 @@ fi
 # ─── 1. Calculate swap size ──────────────────────────────────────────────────
 
 MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+[[ -n "$MEM_KB" && "$MEM_KB" -gt 0 ]] || die "Could not read MemTotal from /proc/meminfo"
 MEM_GB=$(( (MEM_KB + 1048575) / 1048576 ))
 SWAP_SIZE_GB=$((MEM_GB + 4))
 
@@ -102,8 +103,9 @@ Investigate and remove it manually, then re-run this script."
     chattr +C "$SWAP_PATH"
 
     log "Creating swapfile (${SWAP_SIZE_GB}G)..."
+    trap 'rm -f "$SWAP_FILE"; die "Swapfile creation failed — partial file removed, re-run to retry."' ERR
     btrfs filesystem mkswapfile --size "${SWAP_SIZE_GB}G" "$SWAP_FILE"
-    chmod 600 "$SWAP_FILE"
+    trap - ERR
     log "Swapfile created: $SWAP_FILE"
 fi
 
@@ -140,12 +142,12 @@ log "  resume offset : $RESUME_OFFSET"
 OLD_CMDLINE=$(cat "$CMDLINE_FILE")
 
 # Strip any existing resume tokens (handles re-runs with updated values)
-NEW_CMDLINE=$(echo "$OLD_CMDLINE" \
+NEW_CMDLINE=$(printf '%s' "$OLD_CMDLINE" \
     | sed 's/resume=UUID=[^ ]*//g' \
     | sed 's/resume_offset=[^ ]*//g' \
     | sed 's/  */ /g' \
     | sed 's/^ //;s/ $//')
-NEW_CMDLINE="$NEW_CMDLINE resume=UUID=$RESUME_UUID resume_offset=$RESUME_OFFSET"
+NEW_CMDLINE="${NEW_CMDLINE:+$NEW_CMDLINE }resume=UUID=$RESUME_UUID resume_offset=$RESUME_OFFSET"
 
 if [[ "$OLD_CMDLINE" == "$NEW_CMDLINE" ]]; then
     log "Cmdline already up to date — skipping."
@@ -154,7 +156,8 @@ else
     log "  old: $OLD_CMDLINE"
     log "  new: $NEW_CMDLINE"
     _tmp=$(mktemp "${CMDLINE_FILE}.XXXXXX")
-    echo "$NEW_CMDLINE" > "$_tmp"
+    chmod --reference="$CMDLINE_FILE" "$_tmp"
+    printf '%s' "$NEW_CMDLINE" > "$_tmp"
     mv "$_tmp" "$CMDLINE_FILE"
 fi
 
@@ -182,7 +185,7 @@ APPARMOR_PROFILE="/etc/apparmor.d/systemd-sleep"
 log "Writing AppArmor local override: $APPARMOR_LOCAL"
 mkdir -p /etc/apparmor.d/local
 
-cat > "$APPARMOR_LOCAL" << 'EOF'
+cat > "$APPARMOR_LOCAL" << EOF
 # zram-hibernate: allow systemd-sleep to write hibernate resume parameters
 
 # Allow hibernate to write resume parameters to sysfs
@@ -193,8 +196,8 @@ cat > "$APPARMOR_LOCAL" << 'EOF'
 /sys/power/image_size rw,
 
 # Allow access to swapfile
-/var/swap/ r,
-/var/swap/swapfile rw,
+${SWAP_PATH}/ r,
+${SWAP_FILE} rw,
 EOF
 
 if [[ -f "$APPARMOR_PROFILE" ]]; then
@@ -221,7 +224,6 @@ mkdir -p /etc/systemd/sleep.conf.d
 cat > /etc/systemd/sleep.conf.d/hibernate.conf << 'EOF'
 [Sleep]
 HibernateDelaySec=2h
-HibernateMode=platform
 EOF
 log "Written: /etc/systemd/sleep.conf.d/hibernate.conf"
 
