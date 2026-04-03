@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # install.sh — Configure UKI Secure Boot with mkinitcpio-native UKI generation
-# Usage: sudo ./install.sh
+# Usage: sudo ./install.sh [--clean]
 #
 # What this does:
-#   1. Installs dependencies (systemd-ukify, sbctl)
+#   1. Installs dependencies (systemd-ukify, sbctl, systemd-boot-manager)
 #   2. Verifies required system hooks exist
 #   3. Migrates/creates kernel cmdline at /etc/kernel/cmdline
 #   4. Creates /etc/kernel/uki.conf
@@ -14,10 +14,13 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_NAME="$(basename "$(cd "${SCRIPT_DIR}/.." && pwd)")"
-MODULE_NAME="$(basename "${SCRIPT_DIR}")"
-INSTALL_DIR="/etc/${REPO_NAME}/${MODULE_NAME}"
+CLEAN=false
+for arg in "$@"; do
+    case "${arg}" in
+        --clean) CLEAN=true ;;
+        *) echo "Unknown option: ${arg}" >&2; echo "Usage: sudo ./install.sh [--clean]" >&2; exit 1 ;;
+    esac
+done
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -30,10 +33,18 @@ die()  { echo -e "${RED}[install] ERROR:${NC} $*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "Must run as root: sudo ./install.sh"
 
+# ─── Migration notice ────────────────────────────────────────────────────────
+if [[ -d "/etc/uki-secureboot" ]]; then
+    warn "Old installation detected at /etc/uki-secureboot/"
+    warn "Remove it once you've verified this installation works:"
+    warn "  sudo rm -rf /etc/uki-secureboot"
+    echo ""
+fi
+
 # ─── Check dependencies ─────────────────────────────────────────────────────
 log "Checking dependencies..."
 missing=()
-for pkg in systemd-ukify sbctl; do
+for pkg in systemd-ukify sbctl systemd-boot-manager; do
     if ! pacman -Qi "${pkg}" >/dev/null 2>&1; then
         missing+=("${pkg}")
     fi
@@ -57,20 +68,17 @@ done
 if [[ ${#missing_hooks[@]} -gt 0 ]]; then
     die "Required system hooks not found — install the packages that provide them:
 $(printf '  %s\n' "${missing_hooks[@]}")
-  sdboot-systemd-update.hook → sdboot-manage
+  sdboot-systemd-update.hook → systemd-boot-manager (CachyOS)
   zz-sbctl.hook              → sbctl"
 fi
 log "Required hooks present."
 
 # ─── Kernel command line ─────────────────────────────────────────────────────
-# Check for cmdline in old install locations
+# Check for cmdline in legacy location
 OLD_CMDLINE=""
-for old_path in "${INSTALL_DIR}/cmdline" "/etc/uki-secureboot/cmdline"; do
-    if [[ -f "${old_path}" ]]; then
-        OLD_CMDLINE="${old_path}"
-        break
-    fi
-done
+if [[ -f "/etc/uki-secureboot/cmdline" ]]; then
+    OLD_CMDLINE="/etc/uki-secureboot/cmdline"
+fi
 
 if [[ ! -f /etc/kernel/cmdline ]]; then
     mkdir -p /etc/kernel
@@ -124,19 +132,25 @@ for preset in /etc/mkinitcpio.d/*.preset; do
     [[ -f "${preset}" ]] || continue
     preset_name="$(basename "${preset}" .preset)"
 
-    # Check if default_uki is already uncommented/active
-    if grep -qE '^\s*default_uki=' "${preset}"; then
-        log "  ${preset_name}: default_uki already active."
-        continue
-    fi
+    expected_uki="${esp_mount}/EFI/Linux/${preset_name}.efi"
 
-    # Uncomment default_uki if it exists as a comment
-    if grep -qE '^\s*#\s*default_uki=' "${preset}"; then
+    # Check if default_uki is already active
+    if grep -qE '^\s*default_uki=' "${preset}"; then
+        current_uki="$(grep -E '^\s*default_uki=' "${preset}" | sed 's/.*default_uki="\(.*\)"/\1/')"
+        if [[ "${current_uki}" == "${expected_uki}" ]]; then
+            log "  ${preset_name}: default_uki already correct."
+        else
+            sed -i "s|^\(default_uki=\).*|\1\"${expected_uki}\"|" "${preset}"
+            log "  ${preset_name}: updated default_uki path."
+        fi
+    # Uncomment default_uki if it exists as a comment, and set correct path
+    elif grep -qE '^\s*#\s*default_uki=' "${preset}"; then
         sed -i 's/^\s*#\s*\(default_uki=.*\)/\1/' "${preset}"
+        sed -i "s|^\(default_uki=\).*|\1\"${expected_uki}\"|" "${preset}"
         log "  ${preset_name}: enabled default_uki."
     else
-        # Add default_uki line — derive path from preset name
-        echo "default_uki=\"${esp_mount}/EFI/Linux/arch-${preset_name}.efi\"" >> "${preset}"
+        # Add default_uki line
+        echo "default_uki=\"${expected_uki}\"" >> "${preset}"
         log "  ${preset_name}: added default_uki."
     fi
 
@@ -172,20 +186,42 @@ for preset in /etc/mkinitcpio.d/*.preset; do
     fi
 done
 
-# ─── Register UKI paths with sbctl ──────────────────────────────────────────
-log "Registering UKI paths with sbctl for automatic re-signing..."
-if [[ -n "${esp_mount}" ]]; then
+# ─── Clean up stale UKIs from previous runs (--clean) ───────────────────────
+if [[ "${CLEAN}" == true ]]; then
+    log "Cleaning up stale UKIs..."
+    expected_ukis=()
+    for preset in /etc/mkinitcpio.d/*.preset; do
+        [[ -f "${preset}" ]] || continue
+        expected_ukis+=("$(basename "${preset}" .preset).efi")
+    done
+
     for uki in "${esp_mount}"/EFI/Linux/*.efi; do
         [[ -f "${uki}" ]] || continue
-        # Skip snapshot UKIs (managed by snapper-boot)
-        [[ "$(basename "${uki}")" == snapshot-* ]] && continue
-        log "  Signing and registering: ${uki}"
-        sbctl sign -s "${uki}"
+        uki_name="$(basename "${uki}")"
+        [[ "${uki_name}" == snapshot-* ]] && continue
+        is_expected=false
+        for name in "${expected_ukis[@]}"; do
+            if [[ "${uki_name}" == "${name}" ]]; then
+                is_expected=true
+                break
+            fi
+        done
+        if [[ "${is_expected}" == false ]]; then
+            sbctl remove-file "${uki}" 2>/dev/null || true
+            rm -f "${uki}"
+            log "  Removed stale UKI: ${uki}"
+        fi
     done
 fi
 
-# ─── Deploy install dir (for future reference) ──────────────────────────────
-mkdir -p "${INSTALL_DIR}"
+# ─── Register UKI paths with sbctl ──────────────────────────────────────────
+log "Registering UKI paths with sbctl for automatic re-signing..."
+for uki in "${esp_mount}"/EFI/Linux/*.efi; do
+    [[ -f "${uki}" ]] || continue
+    [[ "$(basename "${uki}")" == snapshot-* ]] && continue
+    log "  Signing and registering: ${uki}"
+    sbctl sign -s "${uki}"
+done
 
 # ─── Summary ────────────────────────────────────────────────────────────────
 echo ""

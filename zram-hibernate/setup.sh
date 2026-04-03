@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # setup.sh — Configure hibernate-to-swapfile on BTRFS with ZRAM coexistence
-# Usage: sudo /etc/arch-scripts/zram-hibernate/setup.sh
+# Usage: sudo /etc/cachyos-scripts/zram-hibernate/setup.sh
 
 set -euo pipefail
 

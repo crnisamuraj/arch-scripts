@@ -29,6 +29,16 @@ done
 
 [[ $EUID -eq 0 ]] || die "Must run as root: sudo $0"
 
+# ─── Migration notice ────────────────────────────────────────────────────────
+for _old_dir in "/etc/snapper-boot" "/etc/arch-scripts/snapper-boot"; do
+    if [[ -d "${_old_dir}" ]]; then
+        warn "Old installation detected at ${_old_dir}/"
+        warn "Remove it once you've verified the new installation works:"
+        warn "  sudo rm -rf ${_old_dir}"
+        echo ""
+    fi
+done
+
 # ─── Timeshift coexistence check ────────────────────────────────────────────
 
 if pacman -Qi timeshift >/dev/null 2>&1; then

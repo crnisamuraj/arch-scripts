@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # remove.sh — Undo everything setup.sh configured
-# Usage: sudo /etc/arch-scripts/zram-hibernate/remove.sh
+# Usage: sudo /etc/cachyos-scripts/zram-hibernate/remove.sh
 
 set -euo pipefail
 

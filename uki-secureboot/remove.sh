@@ -6,18 +6,11 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_NAME="$(basename "$(cd "${SCRIPT_DIR}/.." && pwd)")"
-MODULE_NAME="$(basename "${SCRIPT_DIR}")"
-INSTALL_DIR="/etc/${REPO_NAME}/${MODULE_NAME}"
-
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
 NC='\033[0m'
 
 log()  { echo -e "${GREEN}[remove]${NC} $*"; }
-warn() { echo -e "${YELLOW}[remove]${NC} $*"; }
 die()  { echo -e "${RED}[remove] ERROR:${NC} $*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "Must run as root: sudo $0"
@@ -60,17 +53,19 @@ for old_hook in /etc/pacman.d/hooks/99-uki-build.hook /etc/pacman.d/hooks/99-uki
     fi
 done
 
-# ─── Remove install dirs (current and legacy) ───────────────────────────────
-for dir in "${INSTALL_DIR}" "/etc/uki-secureboot"; do
-    if [[ -d "${dir}" ]]; then
-        rm -rf "${dir}"
-        log "Removed ${dir}/"
-    fi
-done
+# ─── Remove legacy install dir if present ────────────────────────────────────
+if [[ -d "/etc/uki-secureboot" ]]; then
+    rm -rf "/etc/uki-secureboot"
+    log "Removed /etc/uki-secureboot/"
+fi
 
 # ─── Summary ────────────────────────────────────────────────────────────────
 echo ""
 log "Removal complete!"
+echo ""
+echo "Next steps:"
+echo "  sudo mkinitcpio -P    — rebuild initramfs (UKIs no longer generated)"
+echo "  sudo bootctl update   — ensure systemd-boot is up to date"
 echo ""
 echo "Not removed (manual cleanup if desired):"
 echo "  /etc/kernel/cmdline   — may be used by other tools"

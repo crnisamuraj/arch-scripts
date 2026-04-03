@@ -1,8 +1,8 @@
-# arch-scripts Implementation Plan
+# cachyos-scripts Implementation Plan
 
 ## Project Goal
 
-`arch-scripts` is a modular collection of Arch Linux setup scripts.
+`cachyos-scripts` is a modular collection of Arch Linux setup scripts.
 
 - Every **folder is a module**
 - Modules implement optional scripts: `install`, `uninstall`, `setup`, `configure` (named after the action, `.sh` extension optional)
@@ -91,9 +91,9 @@ Each module folder may contain any combination of:
 
 | Module | Old path | New path |
 |---|---|---|
-| uki-secureboot | `/etc/uki-secureboot/` | `/etc/arch-scripts/uki-secureboot/` |
-| snapper-boot | `/etc/snapper-boot/` | `/etc/arch-scripts/snapper-boot/` |
-| zram-hibernate | `/etc/zram-hibernate/` | `/etc/arch-scripts/zram-hibernate/` |
+| uki-secureboot | `/etc/uki-secureboot/` | `/etc/cachyos-scripts/uki-secureboot/` |
+| snapper-boot | `/etc/snapper-boot/` | `/etc/cachyos-scripts/snapper-boot/` |
+| zram-hibernate | `/etc/zram-hibernate/` | `/etc/cachyos-scripts/zram-hibernate/` |
 
 ### Dynamic path resolution in install scripts
 ```bash
@@ -111,7 +111,7 @@ Renaming the repo folder automatically updates install paths — required for AU
 - [x] Update `uki-secureboot/install.sh` — dynamic `INSTALL_DIR`
 - [x] Update `snapper-boot/install.sh` — dynamic `INSTALL_DIR`
 - [x] Update all hardcoded `/etc/uki-secureboot/` and `/etc/snapper-boot/` references in scripts
-- [ ] Add migration notice in install scripts: detect old path, warn user to remove manually
+- [x] Add migration notice in install scripts: detect old path, warn user to remove manually
 
 ---
 
@@ -133,7 +133,7 @@ Uncomment `default_uki=` in each preset. Keep `default_image=` active too — sn
 reads the initramfs directly to build snapshot UKIs:
 ```ini
 # /etc/mkinitcpio.d/linux-cachyos.preset
-default_uki="/efi/EFI/Linux/arch-linux-cachyos.efi"
+default_uki="/efi/EFI/Linux/linux-cachyos.efi"
 default_image="/boot/initramfs-linux-cachyos.img"   # keep — snapper-boot needs this
 ```
 
@@ -153,7 +153,7 @@ Move `/etc/uki-secureboot/cmdline` → `/etc/kernel/cmdline` (systemd standard).
 `install.sh` triggers mkinitcpio rebuild and registers the output paths:
 ```bash
 mkinitcpio -p linux-cachyos
-sbctl sign -s /efi/EFI/Linux/arch-linux-cachyos.efi
+sbctl sign -s /efi/EFI/Linux/linux-cachyos.efi
 ```
 
 ### What gets removed
@@ -177,7 +177,7 @@ Before making any changes, verify required system hooks exist:
 - [x] Migrate cmdline to `/etc/kernel/cmdline`
 - [x] Remove `uki-build.sh`, `99-uki-build.hook`, `99-uki-remove.hook`
 - [x] Rewrite `install.sh` — preset editing, uki.conf, cmdline, sbctl registration, service masking, hook existence checks
-- [ ] Update `README.md`
+- [x] Update `README.md`
 
 ---
 
@@ -252,11 +252,11 @@ Before making any changes verify:
 
 Single AUR package shipping the entire repo as-is:
 ```
-pkgname=arch-scripts
+pkgname=cachyos-scripts
 ```
 
 ### What gets packaged
-The full repo is installed to a fixed location (e.g. `/usr/share/arch-scripts/` or `/opt/arch-scripts/`).
+The full repo is installed to a fixed location (e.g. `/usr/share/cachyos-scripts/` or `/opt/cachyos-scripts/`).
 The root meta-scripts (`install.sh`, `remove.sh` etc.) are the user-facing entry points.
 Users can add their own modules by dropping folders into the install location — out of scope for this package.
 
@@ -266,9 +266,9 @@ Users can add their own modules by dropping folders into the install location �
 - `pre_remove()` runs `remove.sh` to clean up deployed system files before package is uninstalled
 
 ### Tasks
-- [ ] Write PKGBUILD
-- [ ] Write `arch-scripts.install` (post_install hint, pre_remove cleanup)
-- [ ] Decide install location: `/usr/share/arch-scripts/` vs `/opt/arch-scripts/`
+- [x] Write PKGBUILD
+- [x] Write `cachyos-scripts.install` (post_install hint, pre_remove cleanup)
+- [x] Decide install location: `/usr/share/cachyos-scripts/` (FHS standard for arch-independent data)
 - [ ] Submit to AUR
 
 ---

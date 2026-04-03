@@ -14,9 +14,11 @@ die()  { echo "[snapshot-uki] ERROR: $*" >&2; exit 1; }
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 
-# Config file path: installed to /etc/arch-scripts/snapper-boot/config by install.sh
-# Fall back to legacy path for compatibility
-if [[ -f "/etc/arch-scripts/snapper-boot/config" ]]; then
+# Config file path: installed to /etc/cachyos-scripts/snapper-boot/config by install.sh
+# Fall back to legacy paths for compatibility
+if [[ -f "/etc/cachyos-scripts/snapper-boot/config" ]]; then
+    CONFIG_FILE="/etc/cachyos-scripts/snapper-boot/config"
+elif [[ -f "/etc/arch-scripts/snapper-boot/config" ]]; then
     CONFIG_FILE="/etc/arch-scripts/snapper-boot/config"
 elif [[ -f "/etc/snapper-boot/config" ]]; then
     CONFIG_FILE="/etc/snapper-boot/config"

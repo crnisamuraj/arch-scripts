@@ -1,0 +1,33 @@
+post_install() {
+    echo ""
+    echo "╔══════════════════════════════════════════════════════╗"
+    echo "║          cachyos-scripts installed                   ║"
+    echo "╚══════════════════════════════════════════════════════╝"
+    echo ""
+    echo "Scripts are installed to: /usr/share/cachyos-scripts/"
+    echo ""
+    echo "Deploy all modules to your system:"
+    echo "  sudo /usr/share/cachyos-scripts/install.sh"
+    echo ""
+    echo "Or deploy individual modules:"
+    echo "  sudo /usr/share/cachyos-scripts/uki-secureboot/install.sh"
+    echo "  sudo /usr/share/cachyos-scripts/snapper-boot/install.sh"
+    echo "  sudo /usr/share/cachyos-scripts/zram-hibernate/install.sh"
+    echo "  sudo /usr/share/cachyos-scripts/apparmor-setup/install.sh"
+    echo ""
+}
+
+post_upgrade() {
+    echo ""
+    echo "cachyos-scripts updated."
+    echo "Re-run install to pick up any changes:"
+    echo "  sudo /usr/share/cachyos-scripts/install.sh"
+    echo ""
+}
+
+pre_remove() {
+    if [[ -x /usr/share/cachyos-scripts/remove.sh ]]; then
+        echo "Removing deployed module files..."
+        /usr/share/cachyos-scripts/remove.sh || true
+    fi
+}

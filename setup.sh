@@ -7,9 +7,9 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-info()  { echo -e "${GREEN}[arch-scripts]${NC} $*"; }
-warn()  { echo -e "${YELLOW}[arch-scripts]${NC} $*"; }
-error() { echo -e "${RED}[arch-scripts]${NC} $*" >&2; }
+info()  { echo -e "${GREEN}[cachyos-scripts]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[cachyos-scripts]${NC} $*"; }
+error() { echo -e "${RED}[cachyos-scripts]${NC} $*" >&2; }
 
 [[ $EUID -eq 0 ]] || { error "Must run as root: sudo $0"; exit 1; }
 

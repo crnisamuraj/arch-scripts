@@ -128,7 +128,7 @@ if [[ $COMPLAIN_MODE -eq 1 ]]; then
     warn "Step 4: Setting all profiles to COMPLAIN mode (--complain flag active)..."
     find /etc/apparmor.d/ -maxdepth 1 -type f -exec aa-complain {} + 2>/dev/null || true
     warn "Profiles are in complain mode — denials are logged but NOT blocked."
-    warn "After auditing: sudo /etc/arch-scripts/apparmor-setup/enforce-all.sh"
+    warn "After auditing: sudo /etc/cachyos-scripts/apparmor-setup/enforce-all.sh"
 else
     warn "Step 4: Enforcing all profiles..."
     warn "TIP: Pass --complain to this script to audit first before blocking."
